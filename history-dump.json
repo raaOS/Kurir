@@ -1,0 +1,12 @@
+[
+  {
+    "date": "TEST_ENTRY_2026-01-28T18:08:29.908Z",
+    "totalRevenue": "Rp0",
+    "orders": [
+      {
+        "id": "test-1",
+        "text": "Test Order"
+      }
+    ]
+  }
+]
