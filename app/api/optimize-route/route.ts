@@ -3,13 +3,13 @@ import { generateText } from "ai";
 
 export async function POST(req: Request) {
     try {
-        const { orders, endPointId, preserveOrder, startPoint } = await req.json();
+        const { orders, endPointId, preserveOrder, startPoint, orderListText: reqOrderListText } = await req.json();
 
         if (!orders || orders.length < 2) {
             return Response.json({ message: "Not enough orders to optimize" }, { status: 400 });
         }
 
-        const orderListText = orders.map((o: any) =>
+        const orderListText = reqOrderListText || orders.map((o: any) =>
             `ID: ${o.id} | Type: ${o.type} (${o.platform}) | Address: ${o.address}`
         ).join("\n");
 
@@ -76,33 +76,36 @@ export async function POST(req: Request) {
         }
 
         const prompt = `
-    You are an expert logistics route planner for JABODETABEK (Jakarta, Bogor, Depok, Tangerang, Bekasi).
+    You are an expert logistics route planner for JABODETABEK.
     
     TASKS:
     1. Analyze the following list of courier orders.
-    ${taskInstruction}
+    2. ${taskInstruction}
     
     ORDERS:
     ${orderListText}
 
-    CRITICAL INSTRUCTION:
+    CRITICAL CONSOLIDATION RULES:
+    1. For each order, RETAIN the recipient_name, order_id, and service_type provided in the record if they are already present and accurate.
+    2. If a field is missing (e.g., "-"), attempt to find it in the "Address" string (which might actually be a raw copy-paste).
+    3. "cleaned_address": MUST be a valid, short address for Google Maps. Clean it from notes, floor numbers, or recipient names.
+    4. "total_revenue": Only return this if you see a new, more accurate total revenue line in the input.
+
     Return ONLY a raw JSON object (no markdown, no backticks).
-    The JSON must contain an array called "route" with objects.
     
     Example output format:
     { 
+      "total_revenue": "Rp11.400",
       "route": [
         { 
             "id": "input_id_1", 
             "distance": "0 km",
             "cleaned_address": "Jl. Merdeka No 45, Jakarta Pusat", 
-            "note": "Pagar hitam, titip satpam (Ibu Ani 0812...)" 
-        },
-        { 
-            "id": "input_id_2", 
-            "distance": "2.5 km",
-            "cleaned_address": "Kota Kasablanka Mall",
-            "note": "Lobby utama"
+            "note": "Pagar hitam",
+            "recipient_name": "Apotek Dian Prima",
+            "deadline": "10:06 PM",
+            "order_id": "GM-191",
+            "service_type": "GrabMart"
         }
       ] 
     }
