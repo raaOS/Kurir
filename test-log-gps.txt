@@ -1,0 +1,13 @@
+--- AUTO GPS FEATURE TEST ---
+Simulated GPS Input: Near Ancol, North Jakarta (Lat -6.12)
+Orders: 
+Mangga Dua Square
+Grand Indonesia
+Blok M Square
+
+--- OPTIMIZED ROUTE ---
+[1] Mangga Dua Square (Dist: 13.2 km)
+[2] Grand Indonesia (Dist: 10.5 km)
+[3] Blok M Square (Dist: 11.7 km)
+
+✅ SUCCESS: Route correctly started at the location nearest to GPS coordinates.

@@ -1,0 +1,15 @@
+--- START POINT FEATURE TEST ---
+Start Point: Stasiun Bekasi, Jawa Barat
+Orders: 
+Neo Soho Mall, Jakarta Barat
+AEON Mall Cakung, Jakarta Timur
+Pondok Indah Mall, Jakarta Selatan
+End Point: Pondok Indah Mall, Jakarta Selatan
+
+--- OPTIMIZED ROUTE ---
+[1] Stasiun Bekasi, Jawa Barat (Dist: 0 km)
+[2] AEON Mall Cakung, Jakarta Timur (Dist: Approximately 35-45 km (depending on traffic))
+[3] Neo Soho Mall, Jakarta Barat (Dist: Approximately 25-35 km (depending on traffic))
+[4] Pondok Indah Mall, Jakarta Selatan (Dist: Approximately 15-25 km (depending on traffic))
+
+❌ FAILURE: Route did not start at the expected nearest location.
