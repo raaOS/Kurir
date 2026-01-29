@@ -131,6 +131,13 @@ CEILING RULE (KERAS):
 - Jika ada ⚠️ warning apa pun (KONFLIK/NUMPANG/UNIT)
 ➡️ confidence MAKSIMAL = 60
 
+GPS SUFFICIENCY RULE (ADD-ON):
+Jika GPS ada TAPI Note mengandung:
+"tanya, satpam tau, ikut, dibelakang, rumah ke-, pintu ke-, masuk gang, sebelah, dekat, samping"
+DAN tidak ada konflik:
+➡️ Tambahkan warning: "GPS_TIDAK_SUFISIEN"
+➡️ confidence MAKSIMAL = 70
+
 FLOOR RULE:
 - Jika hanya ada note manusia
 ➡️ confidence MAKSIMAL = 30
@@ -160,7 +167,16 @@ ${cleanedText}
     const guardedOrders = object.orders.map(order => {
       let finalConfidence = order.confidence;
 
-      if (order.warnings.length > 0) finalConfidence = Math.min(finalConfidence, 60);
+      // 1. Conflict Guards (Red Level) - Cap at 60
+      const severeWarnings = ["KONFLIK_ALAMAT", "ALAMAT_NUMPANG", "KONFLIK_TERDETEKSI", "UNIT_TIDAK_JELAS"];
+      if (order.warnings.some(w => severeWarnings.includes(w))) {
+        finalConfidence = Math.min(finalConfidence, 60);
+      }
+
+      // 2. Insufficiency Guard (Yellow Level) - Cap at 70
+      if (order.warnings.includes("GPS_TIDAK_SUFISIEN")) {
+        finalConfidence = Math.min(finalConfidence, 70);
+      }
 
       const combinedNotes = (order.ambil.note + " " + order.antar.note).toUpperCase();
       if (combinedNotes.includes("⚠️") || combinedNotes.includes("KONFLIK") || combinedNotes.includes("SALAH")) {
