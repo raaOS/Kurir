@@ -995,7 +995,7 @@ export function RouteManager() {
                                                 type="text"
                                                 value={order.address}
                                                 onChange={(e) => updatePreviewOrder(order.id, 'address', e.target.value)}
-                                                className="w-full text-sm font-medium text-gray-900 border-b border-gray-200 focus:border-blue-500 focus:outline-none py-1 bg-transparent"
+                                                className="w-full text-sm font-medium text-black border-b border-gray-200 focus:border-blue-500 focus:outline-none py-1 bg-white"
                                                 placeholder="Jalan..."
                                             />
                                         </div>
@@ -1008,7 +1008,7 @@ export function RouteManager() {
                                             <textarea
                                                 value={order.note || ""}
                                                 onChange={(e) => updatePreviewOrder(order.id, 'note', e.target.value)}
-                                                className="w-full text-xs text-gray-900 bg-yellow-50/50 p-2 rounded-lg border border-yellow-100 focus:border-yellow-300 focus:outline-none resize-none"
+                                                className="w-full text-xs text-black bg-yellow-50 p-2 rounded-lg border border-yellow-100 focus:border-yellow-300 focus:outline-none resize-none"
                                                 rows={2}
                                                 placeholder="Warna rumah, pagar, atau peringatan..."
                                             />
@@ -1020,7 +1020,7 @@ export function RouteManager() {
                                                 value={order.recipientName || ""}
                                                 onChange={(e) => updatePreviewOrder(order.id, 'recipientName', e.target.value)}
                                                 placeholder="Nama Penerima"
-                                                className="text-xs border p-1 rounded bg-gray-50"
+                                                className="text-xs border p-1 rounded bg-white text-black pl-2"
                                             />
                                             {order.orderId && (
                                                 <div className="text-xs bg-gray-100 p-1.5 rounded text-center font-mono text-gray-500">
