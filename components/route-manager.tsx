@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Reorder, useDragControls } from "framer-motion";
-import { Plus, MapPin, Flag, Home, Navigation, Trash2, ArrowRight, ArrowDownUp, GripVertical, Pencil, Check, X, Clock } from "lucide-react";
+import { Plus, MapPin, Flag, Home, Navigation, Trash2, ArrowRight, ArrowDownUp, GripVertical, Pencil, Check, X, Clock, Archive, CloudUpload, History, CloudDownload } from "lucide-react";
 
 type OrderType = "Ambil" | "Antar";
 type Platform = "Grab" | "Shopee";
@@ -24,14 +24,24 @@ interface Order {
     distance?: string;
     isEditing?: boolean; // UI State for editing
     isCompleted?: boolean; // Progress marking
+    distanceSource?: "google" | "ai_estimate";
+}
+
+interface HistorySession {
+    date: string; // Display date
+    timestamp?: number; // For sorting/cleaning (optional for backward compat)
+    orders: Order[];
+    totalRevenue: string;
 }
 
 export function RouteManager() {
     const [orders, setOrders] = useState<Order[]>([]);
+    const [history, setHistory] = useState<HistorySession[]>([]); // Archive
     const [totalRevenue, setTotalRevenue] = useState<string>(""); // Global Revenue
     const [inputText, setInputText] = useState("");
     const [startPoint, setStartPoint] = useState(""); // New State
     const [loading, setLoading] = useState(false);
+    const [showHistory, setShowHistory] = useState(false); // UI Toggle
 
     // Manual selections
     const [selectedPlatform, setSelectedPlatform] = useState<Platform>("Grab");
@@ -39,6 +49,38 @@ export function RouteManager() {
 
     // Quick helper to generate ID
     const generateId = () => Math.random().toString(36).substr(2, 9);
+
+    // Load persistence
+    useEffect(() => {
+        const savedOrders = localStorage.getItem("kurir_orders");
+        const savedRevenue = localStorage.getItem("kurir_revenue");
+        const savedStart = localStorage.getItem("kurir_startpoint");
+
+        if (savedOrders) setOrders(JSON.parse(savedOrders));
+        if (savedRevenue) setTotalRevenue(savedRevenue);
+        if (savedStart) setStartPoint(savedStart);
+
+        // Fetch history from Cloud (GitHub) instead of localStorage
+        const fetchHistory = async () => {
+            try {
+                const res = await fetch("/api/backup-history");
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.history) setHistory(data.history);
+                }
+            } catch (e) {
+                console.error("Gagal load riwayat dari cloud:", e);
+            }
+        };
+        fetchHistory();
+    }, []);
+
+    // Sync persistence (Active Orders only)
+    useEffect(() => {
+        localStorage.setItem("kurir_orders", JSON.stringify(orders));
+        localStorage.setItem("kurir_revenue", totalRevenue);
+        localStorage.setItem("kurir_startpoint", startPoint);
+    }, [orders, totalRevenue, startPoint]);
 
     const handleUseCurrentLocation = () => {
         if (!navigator.geolocation) {
@@ -58,16 +100,197 @@ export function RouteManager() {
         );
     };
 
+    const handleFinishDay = async () => {
+        if (orders.length === 0) return;
+        if (!confirm("Selesaikan hari ini dan masukkan ke riwayat?")) return;
+
+        setLoading(true);
+        try {
+            // 1. Prepare new session
+            const newSession: HistorySession = {
+                date: new Date().toLocaleString("id-ID"),
+                timestamp: Date.now(),
+                orders: [...orders],
+                totalRevenue: totalRevenue || "Rp0"
+            };
+
+            // 2. Fetch existing cloud data to ensure we don't overwrite
+            let cloudHistory: HistorySession[] = [];
+            try {
+                const res = await fetch("/api/backup-history");
+                if (res.ok) {
+                    const data = await res.json();
+                    cloudHistory = data.history || [];
+                }
+            } catch (e) {
+                console.warn("Offline or fetch failed, using local only", e);
+            }
+
+            // 3. Merge: Cloud + Local + New
+            // Use Map for deduplication based on TIMESTAMP (more unique than date string)
+            const uniqueMap = new Map<number | string, HistorySession>();
+
+            const getUniqueKey = (h: HistorySession) => h.timestamp || h.date;
+
+            [...cloudHistory, ...history].forEach(h => uniqueMap.set(getUniqueKey(h), h));
+            uniqueMap.set(getUniqueKey(newSession), newSession); // Add new session
+
+            const mergedHistory = Array.from(uniqueMap.values()).sort((a, b) => {
+                const tA = a.timestamp || new Date(a.date).getTime() || 0;
+                const tB = b.timestamp || new Date(b.date).getTime() || 0;
+                return tB - tA;
+            });
+
+            // 4. Push active update
+            await fetch("/api/backup-history", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ history: mergedHistory }),
+            });
+
+            // 5. Update Local
+            setHistory(mergedHistory);
+            setOrders([]);
+            setTotalRevenue("");
+            alert("Hari ini telah diselesaikan dan aman tersimpan di Cloud (Safe Sync)!");
+
+        } catch (e: any) {
+            alert("Gagal sync: " + e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleBackupToCloud = async () => {
+        setLoading(true);
+        try {
+            // Safe Sync Strategy: Fetch -> Merge -> Push
+            const res = await fetch("/api/backup-history");
+            let cloudHistory: HistorySession[] = [];
+            if (res.ok) {
+                const data = await res.json();
+                cloudHistory = data.history || [];
+            }
+
+            const uniqueMap = new Map<number | string, HistorySession>();
+            const getUniqueKey = (h: HistorySession) => h.timestamp || h.date;
+
+            [...cloudHistory, ...history].forEach(h => uniqueMap.set(getUniqueKey(h), h));
+
+            const mergedHistory = Array.from(uniqueMap.values()).sort((a, b) => {
+                const tA = a.timestamp || new Date(a.date).getTime() || 0;
+                const tB = b.timestamp || new Date(b.date).getTime() || 0;
+                return tB - tA;
+            });
+
+            const response = await fetch("/api/backup-history", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ history: mergedHistory }),
+            });
+
+            if (!response.ok) throw new Error("Gagal push ke cloud");
+
+            setHistory(mergedHistory);
+            alert("Backup & Sync Berhasil! Data Cloud dan HP sudah diselaraskan.");
+        } catch (e: any) {
+            alert("Error: " + e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRestoreFromCloud = async () => {
+        if (!confirm("Ambil data dari Cloud? Ini akan menggabungkan riwayat yang ada di Cloud ke HP ini.")) return;
+
+        setLoading(true);
+        try {
+            const response = await fetch("/api/backup-history");
+            if (!response.ok) throw new Error("Gagal ambil data dari cloud");
+
+            const data = await response.json();
+            if (data.history && data.history.length > 0) {
+                // Merge logic: avoid duplicates by date
+                const cloudHistory: HistorySession[] = data.history;
+
+                // Ensure we have a valid array of history objects
+                const getUniqueKey = (h: HistorySession) => h.timestamp || h.date;
+                const localKeys = new Set(history.map(h => getUniqueKey(h)));
+
+                const uniqueCloud = cloudHistory.filter(h => !localKeys.has(getUniqueKey(h)));
+
+                if (uniqueCloud.length === 0) {
+                    alert("Data di Cloud sama dengan data di HP. Tidak ada yang perlu diupdate.");
+                } else {
+                    setHistory([...uniqueCloud, ...history]);
+                    alert(`Berhasil menarik ${uniqueCloud.length} sesi riwayat baru dari Cloud!`);
+                }
+            } else {
+                alert("Cloud masih kosong. Belum ada data untuk ditarik.");
+            }
+        } catch (e: any) {
+            alert("Error: " + e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleSmartCleanup = async (days: number) => {
+        if (!confirm(`Hapus riwayat yang lebih lama dari ${days} hari?`)) return;
+
+        setLoading(true);
+        try {
+            // 1. Fetch Cloud first to clean everything
+            const res = await fetch("/api/backup-history");
+            let fullHistory = history;
+            if (res.ok) {
+                const data = await res.json();
+                if (data.history) fullHistory = data.history;
+            }
+
+            const cutoff = Date.now() - (days * 24 * 60 * 60 * 1000);
+
+            // 2. Filter with improved legacy date parsing
+            const keptHistory = fullHistory.filter((h: HistorySession) => {
+                const ts = h.timestamp || new Date(h.date).getTime();
+                // If ts is NaN (invalid date), keep it to be safe.
+                if (!ts || isNaN(ts)) return true;
+                return ts > cutoff;
+            });
+
+            const deletedCount = fullHistory.length - keptHistory.length;
+
+            if (deletedCount === 0) {
+                alert("Tidak ada data lama yang perlu dihapus.");
+                return;
+            }
+
+            // 3. Push Cleaned List
+            await fetch("/api/backup-history", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ history: keptHistory }),
+            });
+
+            setHistory(keptHistory);
+            alert(`Berhasil membersihkan ${deletedCount} riwayat lama.`);
+        } catch (e: any) {
+            alert("Gagal cleanup: " + e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handleAdd = async () => {
         if (!inputText.trim()) return;
 
-        if (selectedPlatform === "Grab") {
+        if (selectedPlatform === "Grab" || selectedPlatform === "Shopee") {
             setLoading(true);
             try {
                 const response = await fetch("/api/extract-orders", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ text: inputText, platform: "Grab" }),
+                    body: JSON.stringify({ text: inputText, platform: selectedPlatform }),
                 });
 
                 const data = await response.json();
@@ -82,9 +305,10 @@ export function RouteManager() {
                     id: generateId(),
                     text: inputText,
                     address: o.address,
+                    note: o.note || "",
                     recipientName: o.recipient_name,
                     type: o.type,
-                    platform: "Grab",
+                    platform: o.platform || selectedPlatform,
                     orderId: o.order_id,
                     deadline: o.deadline,
                     serviceType: o.service_type,
@@ -93,7 +317,26 @@ export function RouteManager() {
                     distance: "",
                 }));
 
-                setOrders([...orders, ...formattedOrders]);
+                // Deduplication: Only add if OrderID + Type doesn't exist yet
+                const filteredNewOrders = formattedOrders.filter((newOrder: any) => {
+                    const exists = orders.some(
+                        (existing) =>
+                            existing.orderId === newOrder.orderId &&
+                            existing.type === newOrder.type &&
+                            existing.platform === newOrder.platform
+                    );
+                    return !exists;
+                });
+
+                if (filteredNewOrders.length === 0 && formattedOrders.length > 0) {
+                    alert("Semua pesanan yang di-paste sudah ada di daftar.");
+                } else if (filteredNewOrders.length < formattedOrders.length) {
+                    alert(`${formattedOrders.length - filteredNewOrders.length} pesanan duplikat dilewati.`);
+                    setOrders([...orders, ...filteredNewOrders]);
+                } else {
+                    setOrders([...orders, ...filteredNewOrders]);
+                }
+
                 setInputText("");
             } catch (e: any) {
                 alert(`Gagal: ${e.message}`);
@@ -301,7 +544,8 @@ export function RouteManager() {
                         deadline: data.deadline,
                         orderId: data.order_id,
                         serviceType: data.service_type,
-                        address: data.cleaned_address || o.address
+                        address: data.cleaned_address || o.address,
+                        distanceSource: data.distanceSource
                     };
                 }
                 return o;
@@ -317,6 +561,29 @@ export function RouteManager() {
 
     return (
         <div className="w-full max-w-lg mx-auto space-y-6 pb-20">
+            <div className="flex items-center justify-between px-1">
+                <h1 className="text-2xl font-black text-gray-900 tracking-tight flex items-center gap-2">
+                    <MapPin className="text-blue-600 w-7 h-7" />
+                    Kurir Asisten
+                </h1>
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setShowHistory(true)}
+                        className="p-2 bg-gray-100 hover:bg-gray-200 rounded-full transition text-gray-600"
+                        title="Lihat Riwayat"
+                    >
+                        <History size={20} />
+                    </button>
+                    <button
+                        onClick={handleFinishDay}
+                        className="p-2 bg-green-100 hover:bg-green-200 rounded-full transition text-green-700"
+                        title="Selesaikan Hari Ini"
+                    >
+                        <Archive size={20} />
+                    </button>
+                </div>
+            </div>
+
             {/* Revenue Dashboard */}
             {totalRevenue && (
                 <div className="bg-gradient-to-r from-green-600 to-green-500 p-4 rounded-xl shadow-lg text-white flex justify-between items-center">
@@ -371,7 +638,7 @@ export function RouteManager() {
                         </button>
                     </div>
 
-                    {selectedPlatform !== "Grab" && (
+                    {selectedPlatform !== "Grab" && selectedPlatform !== "Shopee" && (
                         <div className="flex bg-gray-100 p-1 rounded-lg">
                             <button
                                 onClick={() => setSelectedType("Ambil")}
@@ -450,10 +717,15 @@ export function RouteManager() {
                             </div>
 
                             {/* Distance Info */}
+                            {/* Distance Info */}
                             {order.distance && order.distance !== "0 km" && !order.isCompleted && (
-                                <div className="absolute top-3 right-3 bg-indigo-50 text-indigo-700 text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
-                                    <ArrowDownUp className="w-3 h-3" />
-                                    +{order.distance}
+                                <div className={`absolute top-3 right-3 text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1 ${order.distanceSource === "google"
+                                    ? "bg-green-100 text-green-700 border border-green-200"
+                                    : "bg-indigo-50 text-indigo-700"
+                                    }`}>
+                                    {order.distanceSource === "google" ? <Check className="w-3 h-3" /> : <ArrowDownUp className="w-3 h-3" />}
+                                    {order.distanceSource === "google" ? "Maps: " : "+"}
+                                    {order.distance}
                                 </div>
                             )}
 
@@ -464,11 +736,13 @@ export function RouteManager() {
 
                             <div className="pl-12 pr-2">
                                 <div className="flex items-center flex-wrap gap-2 mb-2 pt-1">
-                                    {order.serviceType && (
-                                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
-                                            {order.serviceType}
-                                        </span>
-                                    )}
+                                    {order.serviceType &&
+                                        !["AMBIL", "ANTAR", "DIAMBIL", "DIANTAR", "SHOPEE", "GRAB"].includes(order.serviceType.toUpperCase()) &&
+                                        order.serviceType.toUpperCase() !== order.platform.toUpperCase() && (
+                                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                                                {order.serviceType}
+                                            </span>
+                                        )}
                                     <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${order.platform === "Grab" ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"
                                         }`}>
                                         {order.platform}
@@ -605,6 +879,108 @@ export function RouteManager() {
                     </div>
                 )
             }
-        </div >
+
+
+            {/* History Modal */}
+
+            {showHistory && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl overflow-hidden">
+                        <div className="p-5 border-b flex items-center justify-between bg-gray-50">
+                            <div>
+                                <h2 className="text-xl font-black text-gray-900">Gudang Arsip</h2>
+                                <p className="text-xs text-gray-500 font-medium">Riwayat perjalanan Anda</p>
+                            </div>
+                            <button
+                                onClick={() => setShowHistory(false)}
+                                className="p-2 hover:bg-gray-200 rounded-full transition"
+                            >
+                                <X size={20} className="text-gray-500" />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            {history.length === 0 ? (
+                                <div className="text-center py-10">
+                                    <Archive className="w-12 h-12 text-gray-200 mx-auto mb-3" />
+                                    <p className="text-gray-400 font-medium">Belum ada riwayat tersimpan.</p>
+                                </div>
+                            ) : (
+                                history.map((session, idx) => (
+                                    <div key={idx} className="border rounded-xl p-4 bg-white hover:border-blue-200 transition">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div>
+                                                <h3 className="font-bold text-gray-900">{session.date}</h3>
+                                                <p className="text-xs text-green-600 font-bold">{session.totalRevenue}</p>
+                                            </div>
+                                            <span className="text-[10px] font-bold bg-gray-100 px-2 py-0.5 rounded-full text-gray-500">
+                                                {session.orders.length} Titik
+                                            </span>
+                                        </div>
+                                        <div className="space-y-1 mt-3 opacity-80 border-t pt-3">
+                                            {session.orders.map((o, i) => (
+                                                <div key={o.id} className="text-[11px] flex items-center gap-1 text-gray-600 truncate">
+                                                    <span className={`w-1.5 h-1.5 rounded-full ${o.type === 'Ambil' ? 'bg-blue-400' : 'bg-red-400'}`}></span>
+                                                    <span className="font-bold">[{o.type}]</span> {o.recipientName || o.address}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+
+                        <div className="p-5 border-t bg-gray-50 flex flex-col gap-3">
+                            <div className="flex gap-3">
+                                <button
+                                    onClick={handleBackupToCloud}
+                                    disabled={loading || history.length === 0}
+                                    className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 rounded-xl text-white font-bold text-sm flex items-center justify-center gap-2 transition shadow-md shadow-blue-200"
+                                >
+                                    {loading ? <ArrowDownUp size={16} className="animate-spin" /> : <CloudUpload size={16} />}
+                                    Backup ke Cloud
+                                </button>
+                                <button
+                                    onClick={handleRestoreFromCloud}
+                                    disabled={loading}
+                                    className="flex-1 py-3 bg-white border border-blue-200 text-blue-600 hover:bg-blue-50 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition shadow-sm"
+                                >
+                                    {loading ? <ArrowDownUp size={16} className="animate-spin" /> : <CloudDownload size={16} />}
+                                    Ambil dari Cloud
+                                </button>
+                            </div>
+
+                            {/* Smart Cleanup Section */}
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => handleSmartCleanup(7)}
+                                    className="py-2.5 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-lg text-xs font-bold border border-orange-100 transition"
+                                >
+                                    Hapus {'>'} 7 Hari
+                                </button>
+                                <button
+                                    onClick={() => handleSmartCleanup(30)}
+                                    className="py-2.5 bg-orange-50 text-orange-600 hover:bg-orange-100 rounded-lg text-xs font-bold border border-orange-100 transition"
+                                >
+                                    Hapus {'>'} 30 Hari
+                                </button>
+                            </div>
+
+                            <button
+                                onClick={() => {
+                                    if (confirm("Hapus seluruh riwayat lokal? (Cloud aman)")) {
+                                        setHistory([]);
+                                    }
+                                }}
+                                className="w-full py-2 bg-gray-50 text-gray-400 hover:bg-red-50 hover:text-red-500 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
+                                title="Hapus Semua Lokal"
+                            >
+                                <Trash2 size={14} /> Hapus Lokal Saja
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 }

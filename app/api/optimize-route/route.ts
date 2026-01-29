@@ -113,7 +113,7 @@ export async function POST(req: Request) {
 
         // Using generateText is often more robust for simple keys than generateObject
         const { text } = await generateText({
-            model: google("models/gemini-2.0-flash"),
+            model: google("gemini-2.0-flash"),
             prompt: prompt,
         });
 
@@ -127,6 +127,63 @@ export async function POST(req: Request) {
         } catch (parseError) {
             console.error("JSON Parse Error on:", cleanJson);
             throw new Error("AI returned invalid JSON: " + text.substring(0, 50) + "...");
+        }
+
+        // ... existing AI processing ...
+
+        // HYBRID INTELLIGENCE: Override AI distances with Google Maps Real Data if Key exists
+        if (process.env.GOOGLE_MAPS_API_KEY && result.route && result.route.length > 0) {
+            console.log("🗺️ GOOGLE MAPS ACTIVE: Calculating precise distances...");
+            try {
+                // Helper to fetch distance for a single leg
+                const getLegDistance = async (origin: string, dest: string) => {
+                    if (!origin || !dest) return "0 km";
+                    try {
+                        const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(origin)}&destinations=${encodeURIComponent(dest)}&key=${process.env.GOOGLE_MAPS_API_KEY}`;
+                        const res = await fetch(url);
+                        const data = await res.json();
+
+                        if (data.status !== "OK") {
+                            console.error(`❌ Maps API Error (Status: ${data.status}):`, data.error_message);
+                        } else if (data.rows[0].elements[0].status !== "OK") {
+                            console.error(`⚠️ Route not found (Element Status: ${data.rows[0].elements[0].status}) for ${origin} -> ${dest}`);
+                        }
+
+                        if (data.status === "OK" && data.rows[0].elements[0].status === "OK") {
+                            return data.rows[0].elements[0].distance.text;
+                        }
+                    } catch (e) {
+                        console.error("Maps API Network/Parse Error:", e);
+                    }
+                    return null; // Fallback to AI's guess if fails
+                };
+
+                // Sequential processing to respect rate limits & dependency
+                let currentOrigin = startPoint || "Jakarta, Indonesia"; // Fallback start
+
+                // If startPoint is coordinates (lat,long), it's valid for Maps API
+
+                for (let i = 0; i < result.route.length; i++) {
+                    const stop = result.route[i];
+                    // Use cleaned_address for accuracy, fallback to raw address
+                    const destination = stop.cleaned_address || stop.address;
+
+                    const realDist = await getLegDistance(currentOrigin, destination);
+
+                    if (realDist) {
+                        result.route[i].distance = realDist;
+                        result.route[i].distanceSource = "google";
+                    } else {
+                        result.route[i].distanceSource = "ai_estimate";
+                    }
+
+                    // Update origin for next leg
+                    currentOrigin = destination;
+                }
+                console.log("✅ Google Maps Distances Updated!");
+            } catch (mapError) {
+                console.error("⚠️ Google Maps Integration Failed (Using AI Fallback):", mapError);
+            }
         }
 
         return Response.json(result);
