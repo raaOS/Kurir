@@ -3,77 +3,117 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { normalizeText } from "@/lib/normalizer";
 
-const OrderSchema = z.object({
+// ✅ OUTPUT FORMAT v2.0 (AI-FIRST + BACKEND GUARD)
+const OrderSchemaV2 = z.object({
   orders: z.array(z.object({
-    order_id: z.string().describe("The order ID, e.g. #1234 or GM-191"),
-    platform: z.enum(["Shopee", "Grab", "Manual"]).optional().describe("Platform name"),
-    type: z.enum(["Ambil", "Antar"]).describe("Type of task"),
-    recipient_name: z.string().optional().describe("Name of store or customer"),
-    address: z.string().describe("Clean, GPS-navigable address for Google Maps. Remove notes/landmarks."),
-    note: z.string().describe("Human-readable notes, landmarks, colors, or 'aslinya no X' warnings."),
-    confidence: z.number().describe("0-100 confidence score of extraction quality"),
-    label: z.enum(["clean", "warning", "conflict"]).describe("Status label based on parsing certainty"),
-    deadline: z.string().optional().describe("Delivery deadline/time if available"),
-    service_type: z.string().optional().describe("Service type e.g. Instant, Sameday")
+    order_id: z.string().nullable().describe("Order ID, e.g. #1234. Null if not found."),
+    ambil: z.object({
+      gps: z.string().describe("Clean GPS address choice (Robot). Empty if none."),
+      note: z.string().describe("Human instructions / landmarks. Use ⚠️ for conflicts.")
+    }),
+    antar: z.object({
+      gps: z.string().describe("Clean GPS address choice (Robot). Empty if none."),
+      note: z.string().describe("Human instructions / landmarks. Use ⚠️ for conflicts.")
+    }),
+    confidence: z.number().describe("Initial confidence score (0-100)"),
+    warnings: z.array(z.string()).describe("List of detected issues e.g. 'KONFLIK_ALAMAT', 'ALAMAT_NUMPANG'")
   })),
-  total_revenue: z.string().optional().describe("Total revenue string if available, e.g. 'Rp 150.000'")
+  route_order: z.array(z.string()).describe("Suggested sequence of stops")
 });
 
 export async function POST(req: Request) {
   try {
     const { text, platform } = await req.json();
 
-    if (!text) {
-      return Response.json({ message: "No text provided" }, { status: 400 });
-    }
+    if (!text) return Response.json({ message: "No text provided" }, { status: 400 });
 
     const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
     if (!apiKey) {
-      return Response.json({
-        error: "Missing API Key",
-        details: "API Key (GOOGLE_GENERATIVE_AI_API_KEY) belum diset di .env.local"
-      }, { status: 500 });
+      return Response.json({ error: "Missing API Key" }, { status: 500 });
     }
 
-    // Phase 0: The Cleaner Layer (Pre-processing)
-    // We normalize BEFORE sending to AI to give it a better chance
+    // Phase 0: Normalizer (Typo Tolerance)
     const cleanedText = normalizeText(text);
 
-    console.log("DEBUG: Normalized Text:", cleanedText.substring(0, 100));
+    // 🔒 PROMPT v2.0 — Kurir Chaos Address Parser
+    const systemPrompt = `
+Kamu adalah AI parser khusus data kurir Indonesia.
+Input adalah RAW COPY-PASTE dari Grab / Shopee / SPX, penuh typo, singkatan, dan format rusak.
 
-    const prompt = `
-    You are an expert logistics parser for ${platform} Indonesia.
-    Your GOAL is to separate the "GPS Address" from "Courier Instructions" with extreme precision.
+Tugasmu HANYA:
+1. Menentukan ALAMAT AMBIL
+2. Menentukan ALAMAT ANTAR
+3. Memisahkan GPS ADDRESS vs NOTE MANUSIA
+4. Mendeteksi konflik / numpang alamat
+5. Memberi confidence score 0–100
 
-    INPUT TEXT (Normalized):
-    ${cleanedText}
+DEFINISI PENTING:
+- GPS ADDRESS = alamat yang dipakai Google Maps (Jalan, Kota).
+- NOTE = instruksi manusia, petunjuk visual, emosi, klarifikasi.
+- Jika ragu → masukkan ke NOTE, BUKAN GPS.
 
-    CRITICAL RULES:
-    1. EXTRACT STRICTLY:
-       - "address": ONLY Jalan, Nomor, RT/RW, Kelurahan, Kota. NO landmarks (e.g. "sebelah toko cat").
-       - "note": ALL landmarks, visual descriptions (pagar hitam), warnings, and specific instructions.
-    
-    2. CONFLICT HANDLING:
-       - If address says "No. 12" but text says "aslinya 10", keep "No. 12" in address, but put "⚠️ ASLINYA NO 10" in note.
-       - Label as "conflict" if such contradiction exists.
+ATURAN INTI:
+1. Segmentasi: Anggap alamat lengkap pertama = AMBIL, berikutnya = ANTAR.
+2. GPS (Robot): Ambil versi PALING PANJANG & STRUKTURAL.
+3. NOTE (Manusia): Masukkan ( ... ), KAPITAL emosional, kata arah (depan, pagar, cat), dan KATA KONFLIK (maps salah, aslinya, numpang).
+4. KONFLIK/NUMPANG:
+   - Jika nomor/unit beda atau "numpang alamat":
+   - GPS TETAP yang tertulis resmi.
+   - NOTE ditambah di BARIS PERTAMA: "⚠️ KONFLIK ALAMAT: <penjelasan>"
+   - Masukkan tag "KONFLIK_ALAMAT" atau "ALAMAT_NUMPANG" ke array warnings.
 
-    3. DEDUPLICATION:
-       - Ensure strictly ONE 'Ambil' and ONE 'Antar' per Order ID if applicable.
+OUTPUT WAJIB JSON SESUAI SCHEMA.
+`;
 
-    4. PLATFORM SPECIFIC:
-       - Shopee: Handle blocks starting with Order ID.
-       - Grab: Handle standard Grab format.
-    
-    Return a valid JSON object matching the schema.
-    `;
+    const userPrompt = `
+TEKS HASIL COPY–PASTE:
+"""
+${cleanedText}
+"""
+`;
 
     const { object } = await generateObject({
       model: google("gemini-2.0-flash"),
-      schema: OrderSchema,
-      prompt: prompt,
+      schema: OrderSchemaV2,
+      system: systemPrompt,
+      prompt: userPrompt,
     });
 
-    return Response.json(object);
+    // 🛑 BACKEND GUARDRAILS (SANITY CHECK)
+    // Backend tidak baca alamat, hanya jaga keselamatan.
+    const guardedOrders = object.orders.map(order => {
+      let finalConfidence = order.confidence;
+
+      // Rule 1: Safety First
+      if (order.warnings.length > 0) {
+        finalConfidence = Math.min(finalConfidence, 60); // Max Medium
+      }
+
+      // Rule 2: Conflict Detection in Notes (Double Check)
+      const combinedNotes = (order.ambil.note + " " + order.antar.note).toUpperCase();
+      if (combinedNotes.includes("⚠️") || combinedNotes.includes("KONFLIK") || combinedNotes.includes("SALAH")) {
+        finalConfidence = Math.min(finalConfidence, 60);
+        if (!order.warnings.includes("KONFLIK_TERDETEKSI")) {
+          order.warnings.push("KONFLIK_TERDETEKSI");
+        }
+      }
+
+      // Rule 3: Empty Address Panic
+      if (!order.ambil.gps && !order.antar.gps) {
+        finalConfidence = 20; // Low
+        order.warnings.push("ALAMAT_KOSONG");
+      }
+
+      return {
+        ...order,
+        confidence: finalConfidence
+      };
+    });
+
+    return Response.json({
+      ...object,
+      orders: guardedOrders
+    });
 
   } catch (error) {
     console.error("❌ EXTRACTION API ERROR:", error);

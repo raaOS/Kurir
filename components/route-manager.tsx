@@ -281,26 +281,68 @@ export function RouteManager() {
                     throw new Error(data.details || data.error || "Gagal extract data Grab");
                 }
 
-                const { orders: newOrders, total_revenue } = data;
+                // New Response Structure: { orders: [{ pickup: {...}, dropoff: {...} }], route_order: [...] }
+                const { orders: rawOrders, total_revenue } = data;
                 if (total_revenue) setTotalRevenue(total_revenue);
 
-                const formattedOrders = newOrders.map((o: any) => ({
-                    id: generateId(),
-                    text: inputText,
-                    address: o.address,
-                    note: o.note || "",
-                    recipientName: o.recipient_name,
-                    type: o.type,
-                    platform: o.platform || selectedPlatform,
-                    orderId: o.order_id,
-                    deadline: o.deadline,
-                    serviceType: o.service_type,
-                    isEndPoint: false,
-                    isStartPoint: false,
-                    distance: "",
-                    confidence: o.confidence,
-                    label: o.label
-                }));
+                const formattedOrders: Order[] = [];
+
+                interface ApiOrder {
+                    ambil?: { gps: string; note: string };
+                    antar?: { gps: string; note: string };
+                    recipient_name?: string;
+                    order_id?: string;
+                    deadline?: string;
+                    service_type?: string;
+                    confidence: number;
+                    warnings: string[];
+                }
+
+                rawOrders.forEach((raw: ApiOrder) => {
+                    const hasConflict = raw.warnings && (raw.warnings.includes("KONFLIK_ALAMAT") || raw.warnings.includes("KONFLIK_TERDETEKSI") || raw.warnings.includes("ALAMAT_NUMPANG"));
+
+                    // 1. Process Pickup (Ambil)
+                    if (raw.ambil && (raw.ambil.gps || raw.ambil.note)) {
+                        formattedOrders.push({
+                            id: generateId(),
+                            text: inputText,
+                            address: raw.ambil.gps || "",
+                            note: raw.ambil.note || "",
+                            recipientName: raw.recipient_name || "Pengirim",
+                            type: "Ambil",
+                            platform: selectedPlatform,
+                            orderId: raw.order_id,
+                            deadline: raw.deadline,
+                            serviceType: raw.service_type,
+                            isEndPoint: false,
+                            isStartPoint: false,
+                            distance: "",
+                            confidence: raw.confidence, // Use global confidence
+                            label: hasConflict ? "conflict" : (raw.confidence > 80 ? "clean" : "warning")
+                        });
+                    }
+
+                    // 2. Process Dropoff (Antar)
+                    if (raw.antar && (raw.antar.gps || raw.antar.note)) {
+                        formattedOrders.push({
+                            id: generateId(),
+                            text: inputText,
+                            address: raw.antar.gps || "",
+                            note: raw.antar.note || "",
+                            recipientName: raw.recipient_name || "Penerima",
+                            type: "Antar",
+                            platform: selectedPlatform,
+                            orderId: raw.order_id,
+                            deadline: raw.deadline,
+                            serviceType: raw.service_type,
+                            isEndPoint: false,
+                            isStartPoint: false,
+                            distance: "",
+                            confidence: raw.confidence, // Use global confidence
+                            label: hasConflict ? "conflict" : (raw.confidence > 80 ? "clean" : "warning")
+                        });
+                    }
+                });
 
                 setPreviewOrders(formattedOrders);
                 setShowPreview(true);
