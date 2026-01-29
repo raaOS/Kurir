@@ -158,6 +158,24 @@ export async function POST(req: Request) {
                     return null; // Fallback to AI's guess if fails
                 };
 
+                // Helper to fetch Geocode (Lat/Lng)
+                const getGeocode = async (address: string) => {
+                    if (!address) return null;
+                    try {
+                        const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${process.env.GOOGLE_MAPS_API_KEY}`;
+                        const res = await fetch(url);
+                        const data = await res.json();
+
+                        if (data.status === "OK" && data.results && data.results.length > 0) {
+                            return data.results[0].geometry.location; // { lat, lng }
+                        }
+                        console.warn(`⚠️ Geocode failed for ${address}: ${data.status}`);
+                    } catch (e) {
+                        console.error("Geocode API Error:", e);
+                    }
+                    return null;
+                };
+
                 // Sequential processing to respect rate limits & dependency
                 let currentOrigin = startPoint || "Jakarta, Indonesia"; // Fallback start
 
@@ -168,13 +186,21 @@ export async function POST(req: Request) {
                     // Use cleaned_address for accuracy, fallback to raw address
                     const destination = stop.cleaned_address || stop.address;
 
-                    const realDist = await getLegDistance(currentOrigin, destination);
 
+                    // Get Distance
+                    const realDist = await getLegDistance(currentOrigin, destination);
                     if (realDist) {
                         result.route[i].distance = realDist;
                         result.route[i].distanceSource = "google";
                     } else {
                         result.route[i].distanceSource = "ai_estimate";
+                    }
+
+                    // Get Coordinates for Map Plotted
+                    const coords = await getGeocode(destination);
+                    if (coords) {
+                        result.route[i].lat = coords.lat;
+                        result.route[i].lng = coords.lng;
                     }
 
                     // Update origin for next leg

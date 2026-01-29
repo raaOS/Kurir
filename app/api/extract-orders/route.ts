@@ -78,11 +78,11 @@ DEFINISI PENTING:
 - Jika ragu → masukkan ke NOTE, BUKAN GPS
 - UNKNOWN adalah jawaban sehat
 
-1. SEGMENTASI ORDER (LOCKED)
-- Anggap blok alamat lengkap pertama = AMBIL
-- Blok alamat lengkap berikutnya = ANTAR
-- Abaikan: Chat, Penerima, Berat / dimensi paket
-- Jangan bergantung pada kata "Diambil / Antar" secara kaku
+1. SEGMENTASI ORDER (DIPERKETAT)
+- **CRITICAL**: Satu teks input bisa berisi BANYAK pesanan mandiri.
+- Pisahkan pesanan jika menemukan penanda baru: #ORD-, "PENERIMA", "PEMBELI", "DIANTAR KE".
+- Satu pesanan biasanya terdiri dari satu pasang AMBIL (toko) dan ANTAR (customer).
+- Abaikan: Chat lama atau riwayat transaksi di antara blok pesanan.
 
 2. GPS ADDRESS RULE (ROBOT)
 Sebuah teks LAYAK GPS jika:
