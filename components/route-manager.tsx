@@ -28,6 +28,7 @@ interface Order {
     distanceSource?: "google" | "ai_estimate";
     confidence?: number; // 0-100
     label?: "clean" | "warning" | "conflict";
+    locationHint?: { guess: string; confidence: number; reason: string };
 }
 
 interface HistorySession {
@@ -296,6 +297,7 @@ export function RouteManager() {
                     service_type?: string;
                     confidence: number;
                     warnings: string[];
+                    location_type?: { guess: string; confidence: number; reason: string };
                 }
 
                 rawOrders.forEach((raw: ApiOrder) => {
@@ -339,7 +341,8 @@ export function RouteManager() {
                             isStartPoint: false,
                             distance: "",
                             confidence: raw.confidence, // Use global confidence
-                            label: hasConflict ? "conflict" : (raw.confidence > 80 ? "clean" : "warning")
+                            label: hasConflict ? "conflict" : (raw.confidence > 80 ? "clean" : "warning"),
+                            locationHint: raw.location_type
                         });
                     }
                 });
@@ -966,6 +969,12 @@ export function RouteManager() {
                                                 </span>
                                             )}
                                         </div>
+                                        {/* Location Hint */}
+                                        {order.locationHint && (
+                                            <span className="text-[10px] font-bold bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full flex items-center gap-1 mx-2">
+                                                🏢 {order.locationHint.guess}
+                                            </span>
+                                        )}
                                         {order.label === 'conflict' && (
                                             <span className="text-[10px] font-bold bg-red-600 text-white px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
                                                 <AlertTriangle size={10} /> KONFLIK
