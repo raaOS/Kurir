@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { Reorder, useDragControls } from "framer-motion";
-import { Plus, MapPin, Flag, Home, Navigation, Trash2, ArrowRight, ArrowDownUp, GripVertical, Pencil, Check, X, Clock, Archive, CloudUpload, History, CloudDownload } from "lucide-react";
+import { Plus, MapPin, Flag, Home, Navigation, Trash2, ArrowRight, ArrowDownUp, GripVertical, Pencil, Check, X, Clock, Archive, CloudUpload, History, CloudDownload, AlertTriangle } from "lucide-react";
+import { mergeHistorySessions } from "@/lib/history-utils";
 
 type OrderType = "Ambil" | "Antar";
 type Platform = "Grab" | "Shopee";
@@ -25,6 +26,8 @@ interface Order {
     isEditing?: boolean; // UI State for editing
     isCompleted?: boolean; // Progress marking
     distanceSource?: "google" | "ai_estimate";
+    confidence?: number; // 0-100
+    label?: "clean" | "warning" | "conflict";
 }
 
 interface HistorySession {
@@ -42,6 +45,8 @@ export function RouteManager() {
     const [startPoint, setStartPoint] = useState(""); // New State
     const [loading, setLoading] = useState(false);
     const [showHistory, setShowHistory] = useState(false); // UI Toggle
+    const [previewOrders, setPreviewOrders] = useState<Order[]>([]); // Parsing Preview
+    const [showPreview, setShowPreview] = useState(false);
 
     // Manual selections
     const [selectedPlatform, setSelectedPlatform] = useState<Platform>("Grab");
@@ -127,19 +132,7 @@ export function RouteManager() {
             }
 
             // 3. Merge: Cloud + Local + New
-            // Use Map for deduplication based on TIMESTAMP (more unique than date string)
-            const uniqueMap = new Map<number | string, HistorySession>();
-
-            const getUniqueKey = (h: HistorySession) => h.timestamp || h.date;
-
-            [...cloudHistory, ...history].forEach(h => uniqueMap.set(getUniqueKey(h), h));
-            uniqueMap.set(getUniqueKey(newSession), newSession); // Add new session
-
-            const mergedHistory = Array.from(uniqueMap.values()).sort((a, b) => {
-                const tA = a.timestamp || new Date(a.date).getTime() || 0;
-                const tB = b.timestamp || new Date(b.date).getTime() || 0;
-                return tB - tA;
-            });
+            const mergedHistory = mergeHistorySessions([...history, newSession], cloudHistory);
 
             // 4. Push active update
             await fetch("/api/backup-history", {
@@ -172,16 +165,7 @@ export function RouteManager() {
                 cloudHistory = data.history || [];
             }
 
-            const uniqueMap = new Map<number | string, HistorySession>();
-            const getUniqueKey = (h: HistorySession) => h.timestamp || h.date;
-
-            [...cloudHistory, ...history].forEach(h => uniqueMap.set(getUniqueKey(h), h));
-
-            const mergedHistory = Array.from(uniqueMap.values()).sort((a, b) => {
-                const tA = a.timestamp || new Date(a.date).getTime() || 0;
-                const tB = b.timestamp || new Date(b.date).getTime() || 0;
-                return tB - tA;
-            });
+            const mergedHistory = mergeHistorySessions(history, cloudHistory);
 
             const response = await fetch("/api/backup-history", {
                 method: "POST",
@@ -211,20 +195,19 @@ export function RouteManager() {
             const data = await response.json();
             if (data.history && data.history.length > 0) {
                 // Merge logic: avoid duplicates by date
-                const cloudHistory: HistorySession[] = data.history;
+                const cloudHistory = data.history;
+                const merged = mergeHistorySessions(history, cloudHistory);
 
-                // Ensure we have a valid array of history objects
-                const getUniqueKey = (h: HistorySession) => h.timestamp || h.date;
-                const localKeys = new Set(history.map(h => getUniqueKey(h)));
-
-                const uniqueCloud = cloudHistory.filter(h => !localKeys.has(getUniqueKey(h)));
-
-                if (uniqueCloud.length === 0) {
+                if (merged.length === history.length) {
+                    // Primitive check if anything new was added
+                    // (Assuming merged logic works correctly, if length is same, likely no new unique items)
                     alert("Data di Cloud sama dengan data di HP. Tidak ada yang perlu diupdate.");
                 } else {
-                    setHistory([...uniqueCloud, ...history]);
-                    alert(`Berhasil menarik ${uniqueCloud.length} sesi riwayat baru dari Cloud!`);
+                    setHistory(merged);
+                    alert(`Berhasil sinkronisasi dengan Cloud!`);
                 }
+
+
             } else {
                 alert("Cloud masih kosong. Belum ada data untuk ditarik.");
             }
@@ -315,28 +298,12 @@ export function RouteManager() {
                     isEndPoint: false,
                     isStartPoint: false,
                     distance: "",
+                    confidence: o.confidence,
+                    label: o.label
                 }));
 
-                // Deduplication: Only add if OrderID + Type doesn't exist yet
-                const filteredNewOrders = formattedOrders.filter((newOrder: any) => {
-                    const exists = orders.some(
-                        (existing) =>
-                            existing.orderId === newOrder.orderId &&
-                            existing.type === newOrder.type &&
-                            existing.platform === newOrder.platform
-                    );
-                    return !exists;
-                });
-
-                if (filteredNewOrders.length === 0 && formattedOrders.length > 0) {
-                    alert("Semua pesanan yang di-paste sudah ada di daftar.");
-                } else if (filteredNewOrders.length < formattedOrders.length) {
-                    alert(`${formattedOrders.length - filteredNewOrders.length} pesanan duplikat dilewati.`);
-                    setOrders([...orders, ...filteredNewOrders]);
-                } else {
-                    setOrders([...orders, ...filteredNewOrders]);
-                }
-
+                setPreviewOrders(formattedOrders);
+                setShowPreview(true);
                 setInputText("");
             } catch (e: any) {
                 alert(`Gagal: ${e.message}`);
@@ -345,7 +312,7 @@ export function RouteManager() {
                 setLoading(false);
             }
         } else {
-            // Manual Add for Shopee for now
+            // Manual Add for Generic
             const newOrder: Order = {
                 id: generateId(),
                 text: inputText,
@@ -355,11 +322,46 @@ export function RouteManager() {
                 isEndPoint: false,
                 isStartPoint: false,
                 distance: "",
+                confidence: 100,
+                label: "clean"
             };
 
             setOrders([...orders, newOrder]);
             setInputText("");
         }
+    };
+
+    const confirmPreview = () => {
+        // Deduplication Logic
+        const filteredNewOrders = previewOrders.filter((newOrder) => {
+            const exists = orders.some(
+                (existing) =>
+                    existing.orderId === newOrder.orderId &&
+                    existing.type === newOrder.type &&
+                    existing.platform === newOrder.platform
+            );
+            return !exists;
+        });
+
+        if (filteredNewOrders.length === 0 && previewOrders.length > 0) {
+            alert("Semua pesanan sudah ada di daftar.");
+        } else {
+            if (filteredNewOrders.length < previewOrders.length) {
+                alert(`${previewOrders.length - filteredNewOrders.length} pesanan duplikat dilewati.`);
+            }
+            setOrders([...orders, ...filteredNewOrders]);
+        }
+
+        setShowPreview(false);
+        setPreviewOrders([]);
+    };
+
+    const updatePreviewOrder = (id: string, field: keyof Order, value: any) => {
+        setPreviewOrders(prev => prev.map(o => o.id === id ? { ...o, [field]: value } : o));
+    };
+
+    const removePreviewOrder = (id: string) => {
+        setPreviewOrders(prev => prev.filter(o => o.id !== id));
     };
 
     const handleDelete = (id: string) => {
@@ -879,6 +881,125 @@ export function RouteManager() {
                     </div>
                 )
             }
+
+
+            {/* Preview / Review Modal */}
+            {showPreview && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-4 border-b flex items-center justify-between bg-blue-50">
+                            <div>
+                                <h2 className="text-lg font-black text-gray-900 flex items-center gap-2">
+                                    <CloudDownload className="w-5 h-5 text-blue-600" />
+                                    Review Hasil AI
+                                </h2>
+                                <p className="text-xs text-blue-600 font-bold opacity-80">
+                                    Cek alamat & catatan sebelum masuk daftar
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => { setShowPreview(false); setPreviewOrders([]); }}
+                                className="p-2 hover:bg-blue-100 rounded-full transition text-blue-400"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
+                            {previewOrders.map((order, idx) => (
+                                <div key={order.id} className={`p-4 rounded-xl border bg-white shadow-sm transition-all ${order.label === 'conflict' ? 'border-red-300 ring-2 ring-red-50' :
+                                    order.label === 'warning' ? 'border-orange-300' : 'border-gray-100'
+                                    }`}>
+                                    {/* Header Badges */}
+                                    <div className="flex justify-between items-start mb-3">
+                                        <div className="flex gap-2 items-center">
+                                            <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${order.type === "Ambil" ? "bg-blue-100 text-blue-700" : "bg-red-100 text-red-700"}`}>
+                                                {order.type}
+                                            </span>
+                                            {order.confidence !== undefined && (
+                                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${order.confidence > 80 ? "bg-green-100 text-green-700" :
+                                                    order.confidence > 50 ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"
+                                                    }`}>
+                                                    {order.confidence}% Akurat
+                                                </span>
+                                            )}
+                                        </div>
+                                        {order.label === 'conflict' && (
+                                            <span className="text-[10px] font-bold bg-red-600 text-white px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
+                                                <AlertTriangle size={10} /> KONFLIK
+                                            </span>
+                                        )}
+                                        <button onClick={() => removePreviewOrder(order.id)} className="text-gray-300 hover:text-red-500">
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </div>
+
+                                    {/* Address Input */}
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-gray-500 uppercase flex items-center gap-1 mb-1">
+                                                <MapPin size={10} /> Alamat Maps (Bersih)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={order.address}
+                                                onChange={(e) => updatePreviewOrder(order.id, 'address', e.target.value)}
+                                                className="w-full text-sm font-medium border-b border-gray-200 focus:border-blue-500 focus:outline-none py-1 bg-transparent"
+                                                placeholder="Jalan..."
+                                            />
+                                        </div>
+
+                                        {/* Note Input */}
+                                        <div>
+                                            <label className="text-[10px] font-bold text-gray-500 uppercase flex items-center gap-1 mb-1">
+                                                <Pencil size={10} /> Catatan / Patokan
+                                            </label>
+                                            <textarea
+                                                value={order.note || ""}
+                                                onChange={(e) => updatePreviewOrder(order.id, 'note', e.target.value)}
+                                                className="w-full text-xs text-gray-600 bg-yellow-50/50 p-2 rounded-lg border border-yellow-100 focus:border-yellow-300 focus:outline-none resize-none"
+                                                rows={2}
+                                                placeholder="Warna rumah, pagar, atau peringatan..."
+                                            />
+                                        </div>
+
+                                        {/* Meta Info */}
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <input
+                                                value={order.recipientName || ""}
+                                                onChange={(e) => updatePreviewOrder(order.id, 'recipientName', e.target.value)}
+                                                placeholder="Nama Penerima"
+                                                className="text-xs border p-1 rounded bg-gray-50"
+                                            />
+                                            {order.orderId && (
+                                                <div className="text-xs bg-gray-100 p-1.5 rounded text-center font-mono text-gray-500">
+                                                    #{order.orderId}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="p-4 border-t bg-white flex gap-3">
+                            <button
+                                onClick={() => { setShowPreview(false); setPreviewOrders([]); }}
+                                className="flex-1 py-3 text-gray-500 font-bold text-sm hover:bg-gray-100 rounded-xl transition"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                onClick={confirmPreview}
+                                className="flex-[2] py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-lg shadow-blue-200 transition active:scale-95 flex justify-center items-center gap-2"
+                            >
+                                <Check size={18} />
+                                Tambahkan {previewOrders.length} Pesanan
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
 
             {/* History Modal */}
