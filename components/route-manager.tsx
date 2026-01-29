@@ -995,7 +995,7 @@ export function RouteManager() {
                                                 type="text"
                                                 value={order.address}
                                                 onChange={(e) => updatePreviewOrder(order.id, 'address', e.target.value)}
-                                                className="w-full text-sm font-medium border-b border-gray-200 focus:border-blue-500 focus:outline-none py-1 bg-transparent"
+                                                className="w-full text-sm font-medium text-gray-900 border-b border-gray-200 focus:border-blue-500 focus:outline-none py-1 bg-transparent"
                                                 placeholder="Jalan..."
                                             />
                                         </div>
@@ -1008,7 +1008,7 @@ export function RouteManager() {
                                             <textarea
                                                 value={order.note || ""}
                                                 onChange={(e) => updatePreviewOrder(order.id, 'note', e.target.value)}
-                                                className="w-full text-xs text-gray-600 bg-yellow-50/50 p-2 rounded-lg border border-yellow-100 focus:border-yellow-300 focus:outline-none resize-none"
+                                                className="w-full text-xs text-gray-900 bg-yellow-50/50 p-2 rounded-lg border border-yellow-100 focus:border-yellow-300 focus:outline-none resize-none"
                                                 rows={2}
                                                 placeholder="Warna rumah, pagar, atau peringatan..."
                                             />
